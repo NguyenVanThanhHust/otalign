@@ -24,7 +24,7 @@ import pdb
 import argparse
 import ot
 
-from src.bilind import gromov_bilind, bilingual_mapping
+from src.bilind import gromov_bilind, bilingual_mapping, custom_gromov_bilind
 import src.embeddings as embeddings
 
 
@@ -62,7 +62,7 @@ def load_vectors(args):
         else:
             raise ValueError('Unrecognized dictionary fold for evaluation')
     elif args.task == 'dinu':
-        data_dir = os.path.join(args.home_dir,'pkg/vecmap/data')
+        data_dir = args.data_dir
         dict_dir = os.path.join(data_dir, 'dictionaries/')
         src_path = os.path.join(data_dir, 'embeddings/original', args.src_lang + '.emb.txt')
         trg_path = os.path.join(data_dir, 'embeddings/original', args.trg_lang + '.emb.txt')
@@ -271,7 +271,7 @@ def print_header(method):
     print('='*13 +'  Bilingual Lexical Induction with Gromov-Wasserstein  ' +'='*12)
     print('='*80)
 
-def main():
+def old_main():
     """
 
         Pass outpath=checkpotins/bla to solve()
@@ -299,6 +299,7 @@ def main():
     print('Saving results to: {}'.format(outdir))
 
     # Instantiate Bilingual Lexical Induciton Object
+
     BLI = gromov_bilind(xs, xt, args.src_lang, args.trg_lang, src_words, trg_words,
                         src_word2ind, trg_word2ind, src2trg,
                         metric = args.metric, normalize_vecs = args.normalize_vecs,
@@ -333,6 +334,121 @@ def main():
     #BLI.mapping = BLI.get_mapping(anchor_method = 'barycenter')
     #BLI.mapping = BLI.get_mapping(anchor_method = 'all')
     BLI.mapping = BLI.get_mapping(anchor_method = 'mutual_nn', max_anchors = None)
+
+    acc_file = os.path.join(outdir, 'accuracies.tsv')
+    acc_dict = {}
+    print('Results on test dictionary for fitting vectors: (via coupling)')
+    acc_dict['coupling'] = BLI.test_accuracy(verbose=True, score_type = 'coupling')
+    print('Results on test dictionary for fitting vectors: (via coupling + csls)')
+    acc_dict['coupling_csls'] = BLI.test_accuracy(verbose=True, score_type = 'coupling', adjust = 'csls')
+
+    print('Results on test dictionary for fitting vectors: (via bary projection)')
+    acc_dict['bary'] = BLI.test_accuracy(verbose=True, score_type = 'barycentric')
+    print('Results on test dictionary for fitting vectors: (via bary projection + csls)')
+    acc_dict['bary_csls'] = BLI.test_accuracy(verbose=True, score_type = 'barycentric', adjust = 'csls')
+
+    print('Results on test dictionary for fitting vectors: (via orth projection)')
+    acc_dict['proj'] = BLI.test_accuracy(verbose=True, score_type = 'projected')
+    print('Results on test dictionary for fitting vectors: (via orth projection + csls)')
+    acc_dict['proj_csls'] = BLI.test_accuracy(verbose=True, score_type = 'projected', adjust = 'csls')
+
+    if outdir:
+        print('Saving accuacy results')
+        with open(acc_file, 'w') as f:
+            for k,acc in acc_dict.items():
+                f.write('\t'.join([k] + ['{:4.2f}'.format(100*v) for v in acc.values()]) + '\n')
+        print('Saving in-vocabulary translations and mapped vectors')
+        translation_file = os.path.join(outdir, "translations_transductive.tsv")
+        BLI.dump_translations(src2trg, translation_file)
+        #BLI.export_mapped(iov_mode='matched', outf=outdir, suffix = 'match') # Only needed for debug/analysis purposes
+        BLI.export_mapped(iov_mode='projection', outf=outdir, suffix = 'proj')
+
+
+    ### STEP 2: Out-of sample vectors
+    print('************')
+    print('Compute now for all vectors')
+    # Read Word Embeddings
+    argsc = argparse.Namespace(**vars(args))
+    argsc.maxs = max(200000, args.maxs)
+    argsc.maxt = max(200000, args.maxt)
+
+    BLI.load_oov_data(*load_vectors(argsc), keep_original = True, normalize=True)
+    #BLI.normalize_embeddings()
+
+    print('Projecting and dumping....')
+    if BLI.mapping is not None:
+        BLI.export_mapped(iov_mode='projection', outf=outdir, suffix = 'proj-proj')
+        #BLI.export_mapped(iov_mode='barycentric', outf=outdir, suffix = 'bary-proj')
+        #BLI.export_mapped(iov_mode='matched', outf=outdir, suffix = 'match-proj')
+        print('Done!')
+
+def init_data():
+    xs = np.random.rand(2048, 300)
+    xt = np.random.rand(2048, 300)
+    return xs, xt
+
+
+def main():
+    """
+
+        Pass outpath=checkpotins/bla to solve()
+        Save progress plots, and current G and P in a pkl file:
+        (it, G_t, P_t, lambda_G, lambda_P, ent_reg, ....)
+
+        Add restarting from checkpoint:
+
+        Saving to out:
+            - history plot
+            - final scores
+            - tranlsations?
+            - model? Popt Gopt
+    """
+    args, optim_args = parse_args()
+
+    # Read Word Embeddings
+    xs, xt = init_data()
+
+    outdir   = make_path(args.results_path, args)
+    chkptdir = make_path(args.chkpt_path, args)
+
+    print('Saving checkpoints to: {}'.format(chkptdir))
+    print('Saving results to: {}'.format(outdir))
+
+    # Instantiate Bilingual Lexical Induciton Object
+
+    BLI = custom_gromov_bilind(xs, xt, 
+                        metric = args.metric, normalize_vecs = args.normalize_vecs,
+                        normalize_dists = args.normalize_dists,
+                        score_type = args.score_type, adjust = args.adjust,
+                        distribs = args.distribs)
+    BLI.init_optimizer(**vars(optim_args)) # FIXME: This is ugly. Get rid of it
+
+    if (not args.load) or (not os.path.exists(os.path.join(outdir, "results.pkl"))):
+        if args.load:
+            print('Could not load!!!')
+        print('Will train from scratch')
+        start = time()
+        BLI.fit(maxiter=args.maxiter, plot_every=args.plot_freq,
+                print_every=args.print_freq, verbose=True, save_plots = outdir)
+        plt.close('all')
+        print('Total elapsed time: {}s'.format(time() - start))
+        if outdir:
+            BLI.solver.plot_history(save_path=os.path.join(outdir, 'history.pdf'))
+            acc = 0
+            dump_results(outdir, args, optim_args, acc, BLI)
+        else:
+            BLI.solver.plot_history()
+        print('Done!')
+    else:
+        print('Will load pre-solved solution from: ', outdir)
+        BLI = load_results(outdir, BLI)
+
+
+    ### Infer mapping from coupling - there's many ways to do this.
+    #BLI.mapping = BLI.get_mapping(anchor_method = 'mutual_nn', max_anchors = 5000)
+    #BLI.mapping = BLI.get_mapping(anchor_method = 'barycenter')
+    #BLI.mapping = BLI.get_mapping(anchor_method = 'all')
+    BLI.mapping = BLI.get_mapping(anchor_method = 'barycenter')
 
     acc_file = os.path.join(outdir, 'accuracies.tsv')
     acc_dict = {}
