@@ -33,7 +33,7 @@ except ImportError:
     from src.gw_optim import gromov_wass_solver
 
 from src import orth_procrustes
-
+from sklearn.metrics import pairwise_distances
 
 def pprint_golddict(d, src, tgt):
     for i,vals in d.items():
@@ -132,10 +132,17 @@ class custom_bilingual_mapping():
         t_label = self.t_label
         xs = self.xs
         xt = self.xt
-
         current_mapping = self.mapping
         predicted_xt = xs.dot(current_mapping)
-        print(predicted_xt.shape)
+        distances_matrix = pairwise_distances(xt, predicted_xt)
+        print(distances_matrix.shape)
+        # for i in range(xt.shape[0]):
+        #     for j in range(predicted_xt.shape[0]):
+        #         u = xt[i]
+        #         v = predicted_xt[j]
+
+        # print(predicted_xt.shape)
+
 
 
     def compute_scores(self, score_type, adjust = None, verbose = False):
@@ -339,47 +346,6 @@ class custom_bilingual_mapping():
 
         self.xs = self.xs@W_s#.T
         self.xt = self.xt@W_t#.T
-
-
-
-class procot_bilind(bilingual_mapping):
-    """
-        Bilingual lexical induction with Procrustes Optimal Transport.
-    """
-    def __init__(self, *args, **kwargs):
-        super(procot_bilind, self).__init__(*args, **kwargs)
-
-    def get_mapping(self, *args, **kwargs):
-        return self.mapping
-
-    def init_optimizer(self, *args, **kwargs):
-        print('Initializing bilingual mapping with Procrustes OT')
-        self.solver = invarot.optim.invariance_ot_solver(**kwargs)
-        self.solver.accuracy_function = self._test_accuracy
-
-    def fit(self, maxiter = 100, plot_every = 100, print_every = 10,
-            verbose = True, *args, **kwargs):
-        if not self.solver:
-            raise ValueError('Optimizer has not been initalized yet. Call init_optimizer before hand.')
-
-        # 0. Pre-processing
-        self.normalize_embeddings()
-
-        # 1. Solve OT
-        print('Solving optimization problem...')
-        if hasattr(self,"P_init"):  #is not None:
-            P_init = self.P_init
-        else:
-            P_init = None
-        G,P = self.solver.solve(self.xs,self.xt, P_init = P_init, maxiter = maxiter,
-                                plot_every = plot_every, print_every = print_every,
-                                verbose = verbose)
-        self.coupling   = G
-        self.mapping    = P
-
-        # 2. From Couplings to Translation Score
-        print('Computing translation scores...')
-        self.compute_scores(self.score_type, adjust = self.adjust)
 
 
 class custom_gromov_bilind(custom_bilingual_mapping):

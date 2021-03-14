@@ -24,7 +24,7 @@ import pdb
 import argparse
 import ot
 
-from src.bilind import gromov_bilind, bilingual_mapping, custom_gromov_bilind
+from src.bilind import custom_gromov_bilind
 import src.embeddings as embeddings
 
 
@@ -157,10 +157,21 @@ def print_header(method):
     print('='*80)
 
 def init_data():
-    xs = np.random.rand(300, 2048)
-    xt = np.random.rand(300, 2048)
-    return xs, xt
+    sigma = 1.0
+    xs, xt = [], []
+    s_label, t_label = [], []
+    for i in range(300):
+        mu = i*0.3
+        vs = np.random.normal(mu, sigma, 2048)
+        vt = np.random.normal(mu, sigma, 2048)
+        xs.append(vs)
+        xt.append(vt)
+        s_label.append(i)
+        t_label.append(i)
 
+    xs, xt = np.array(xs), np.array(xt)
+
+    return xs, xt, s_label, t_label
 
 def main():
     """
@@ -180,17 +191,13 @@ def main():
     args, optim_args = parse_args()
 
     # Read Word Embeddings
-    xs, xt = init_data()
+    xs, xt, s_label, t_label = init_data()
 
     outdir   = make_path(args.results_path, args)
     chkptdir = make_path(args.chkpt_path, args)
 
     print('Saving checkpoints to: {}'.format(chkptdir))
     print('Saving results to: {}'.format(outdir))
-
-    # Instantiate Bilingual Lexical Induciton Object
-    s_label = [1, 2, 3, 4]
-    t_label = [1, 2, 3, 4]
 
     BLI = custom_gromov_bilind(xs, xt, s_label, t_label, 
                         metric = args.metric, normalize_vecs = args.normalize_vecs,
@@ -222,27 +229,11 @@ def main():
 
 
     ### Infer mapping from coupling - there's many ways to do this.
-    #BLI.mapping = BLI.get_mapping(anchor_method = 'mutual_nn', max_anchors = 5000)
-    #BLI.mapping = BLI.get_mapping(anchor_method = 'barycenter')
-    #BLI.mapping = BLI.get_mapping(anchor_method = 'all')
-    BLI.mapping = BLI.get_mapping(anchor_method = 'barycenter', max_anchors = 5000)
     print(BLI.mapping.shape)
-    # acc_file = os.path.join(outdir, 'accuracies.tsv')
-    # acc_dict = {}
-    # print('Results on test dictionary for fitting vectors: (via coupling)')
-    # acc_dict['coupling'] = BLI.test_accuracy(verbose=True, score_type = 'coupling')
-    # print('Results on test dictionary for fitting vectors: (via coupling + csls)')
-    # acc_dict['coupling_csls'] = BLI.test_accuracy(verbose=True, score_type = 'coupling', adjust = 'csls')
-
-    # print('Results on test dictionary for fitting vectors: (via bary projection)')
-    # acc_dict['bary'] = BLI.test_accuracy(verbose=True, score_type = 'barycentric')
-    # print('Results on test dictionary for fitting vectors: (via bary projection + csls)')
-    # acc_dict['bary_csls'] = BLI.test_accuracy(verbose=True, score_type = 'barycentric', adjust = 'csls')
-
-    # print('Results on test dictionary for fitting vectors: (via orth projection)')
-    # acc_dict['proj'] = BLI.test_accuracy(verbose=True, score_type = 'projected')
-    # print('Results on test dictionary for fitting vectors: (via orth projection + csls)')
-    # acc_dict['proj_csls'] = BLI.test_accuracy(verbose=True, score_type = 'projected', adjust = 'csls')
+    acc_file = os.path.join(outdir, 'accuracies.tsv')
+    acc_dict = {}
+    print('Results on test dictionary for fitting vectors: (via bary projection)')
+    acc_dict['bary'] = BLI.test_accuracy(verbose=True, score_type = 'barycentric')
 
     if outdir:
         # print('Saving accuacy results')

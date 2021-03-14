@@ -451,7 +451,7 @@ def main():
     #BLI.mapping = BLI.get_mapping(anchor_method = 'barycenter')
     #BLI.mapping = BLI.get_mapping(anchor_method = 'all')
     BLI.mapping = BLI.get_mapping(anchor_method = 'barycenter', max_anchors = 5000)
-    print(BLI.mapping.shape)
+
     # acc_file = os.path.join(outdir, 'accuracies.tsv')
     # acc_dict = {}
     # print('Results on test dictionary for fitting vectors: (via coupling)')
