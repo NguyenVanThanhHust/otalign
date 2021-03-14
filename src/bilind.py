@@ -128,21 +128,23 @@ class custom_bilingual_mapping():
 
             Seems uncessary to have both this and compute_scores. Consider merging.
         """
-        s_label = self.s_label
-        t_label = self.t_label
+        s_labels = self.s_label
+        t_labels = self.t_label
         xs = self.xs
         xt = self.xt
         current_mapping = self.mapping
         predicted_xt = xs.dot(current_mapping)
-        distances_matrix = pairwise_distances(xt, predicted_xt)
-        print(distances_matrix.shape)
-        # for i in range(xt.shape[0]):
-        #     for j in range(predicted_xt.shape[0]):
-        #         u = xt[i]
-        #         v = predicted_xt[j]
-
-        # print(predicted_xt.shape)
-
+        num_sample = xs.shape[0]
+        correct = 0
+        distances_matrix = pairwise_distances(xs, predicted_xt)
+        for i, (s_label, t_label) in enumerate(zip(s_labels, t_labels)):
+            predict_label = np.argmin(distances_matrix[i, :])
+            if s_label == predict_label:
+                correct += 1
+            else:
+                print("true: ", s_label, " predicted: ", predict_label)
+        acc = correct / num_sample
+        return acc
 
 
     def compute_scores(self, score_type, adjust = None, verbose = False):

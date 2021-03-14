@@ -238,7 +238,7 @@ def main():
     acc_dict = {}
     print('Results on test dictionary for fitting vectors: (via bary projection)')
     acc_dict['bary'] = BLI.test_accuracy(verbose=True, score_type = 'barycentric')
-
+    print(acc_dict)
     if outdir:
         # print('Saving accuacy results')
         # with open(acc_file, 'w') as f:
