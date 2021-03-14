@@ -563,7 +563,7 @@ class custom_bilingual_mapping():
     """
         Generic class with a lot of useful methods for bilingual mappings
     """
-    def __init__(self, xs, xt, test_dict = None, metric = 'euclidean', normalize_vecs = 'both',
+    def __init__(self, xs, xt, s_label, t_label, test_dict = None, metric = 'euclidean', normalize_vecs = 'both',
         normalize_dists = False, score_type = 'coupling', adjust = None, distribs = 'uniform', **kwargs):
         self.xs              = xs # Source embedding
         self.xt              = xt # Target embeddings
@@ -579,6 +579,8 @@ class custom_bilingual_mapping():
         self.ns, self.ds     = xs.shape
         self.nt, self.dt     = xt.shape
         self.mapping         = None # Will be updated after optim
+        self.s_label         = s_label
+        self.t_label         = t_label
 
         # dump value
         self.test_dict       = None
@@ -606,25 +608,6 @@ class custom_bilingual_mapping():
         BLI.mapping  = results['P']
         BLI.coupling = results['G']
 
-    def load_oov_data(self, xs, xt, src_words, trg_words, src_word2ind,
-                      trg_word2ind, src2trg, keep_original = True, normalize = True):
-        # THIS MAKES THE CRITICAL ASSUMPTION THAT xs_oov, xt_oov, words, etc,
-        # are supersets and in same order of xs xt
-        n , m = self.ns, self.nt
-        if not keep_original:
-            self.xs     = xs[:n,:]
-            self.xt     = xt[:m,:]
-        self.xt_oov = xt[m:,:]
-        self.xs_oov = xs[n:,:]
-        self.src2trg      = src2trg
-        # Clean previous score computation
-        self.scores       = None
-        assert self.xs.shape[0] + self.xs_oov.shape[0] == len(src_words)
-        assert self.xt.shape[0] + self.xt_oov.shape[0] == len(trg_words)
-
-        if normalize:
-            self.normalize_embeddings()
-
     def _test_accuracy(self, G, P = None, verbose = False):
         """
             Dummy function. It's puropose is to have a callable to
@@ -648,18 +631,15 @@ class custom_bilingual_mapping():
 
             Seems uncessary to have both this and compute_scores. Consider merging.
         """
-        if score_type is None:
-            score_type = self.score_type
-        if adjust is None:
-            adjust = self.adjust
-        if self.coupling is None:
-            raise ValueError('Optimal coupling G has not been computed yet')
-        self.compute_scores(score_type, adjust, verbose = verbose > 1)
-        accs = self.score_translations(self.test_dict, verbose = verbose > 1)
-        if verbose > 0:
-            for k, v in accs.items():
-                print('Accuracy @{:2}: {:8.2f}%'.format(k,100*v))
-        return accs
+        s_label = self.s_label
+        t_label = self.t_label
+        xs = self.xs
+        xt = self.xt
+
+        current_mapping = self.mapping
+        predicted_xt = xs.dot(current_mapping)
+        print(predicted_xt.shape)
+
 
     def compute_scores(self, score_type, adjust = None, verbose = False):
         """ Exlcusive to OT methods. Given coupling matrix, compute scores that will
@@ -679,6 +659,7 @@ class custom_bilingual_mapping():
             ot_emd.xs_ = self.xs
             ot_emd.xt_ = self.xt
             ot_emd.coupling_= self.coupling
+            print("compute_scores self.coupling: ", self.coupling)
             xt_s = ot_emd.inverse_transform(Xt=self.xt) # Maps target to source space
             scores = -sp.spatial.distance.cdist(self.xs, xt_s, metric = self.metric) #FIXME: should this be - dist?
         elif score_type == 'distance':
@@ -716,171 +697,29 @@ class custom_bilingual_mapping():
         # Check if we're in oov case or not.
         n,m = self.coupling.shape
 
-        oov_src = (self.xs_oov is not None) and (n != self.xs_oov.shape[0])
-        oov_trg = (self.xt_oov is not None) and (m != self.xt_oov.shape[0])
-        any_oov = oov_src or oov_trg
-        if any_oov:
-            xs_hat = np.concatenate([self.xs,self.xs_oov])
-        else:
-            xs_hat = self.xs
+        # Will treat IIV and OOVs differently
+        if iov_mode == 'barycentric':
+            ot_emd = ot.da.EMDTransport()
+            ot_emd.xs_ = self.xs
+            ot_emd.xt_ = self.xt@self.mapping.T
+            ot_emd.coupling_= self.coupling
+            #xs_hat = ot_emd.transform(Xs=self.xs)
+            xt_hat_iov = ot_emd.inverse_transform(Xt=self.xt)
+        elif iov_mode == 'matched':
+            # Map initial vectors deterministically by their predicted translation
+            xt_hat_iov   = self.xs[self.coupling.argmax(axis=0),:]
+        elif iov_mode == 'projection':
+            xt_hat_iov   = self.xt@self.mapping.T
+        xt_hat = xt_hat_iov
 
-        # Get the IIVs
-        if any_oov and iov_mode == 'projection' and oov_mode == 'projection':
-            # Both are projected
-            xt_hat = np.concatenate([self.xt,self.xt_oov])@self.mapping.T
-        else:
-            # Will treat IIV and OOVs differently
-            if iov_mode == 'barycentric':
-                ot_emd = ot.da.EMDTransport()
-                ot_emd.xs_ = self.xs
-                ot_emd.xt_ = self.xt@self.mapping.T
-                ot_emd.coupling_= self.coupling
-                #xs_hat = ot_emd.transform(Xs=self.xs)
-                xt_hat_iov = ot_emd.inverse_transform(Xt=self.xt)
-            elif iov_mode == 'matched':
-                # Map initial vectors deterministically by their predicted translation
-                xt_hat_iov   = self.xs[self.coupling.argmax(axis=0),:]
-            elif iov_mode == 'projection':
-                xt_hat_iov   = self.xt@self.mapping.T
-            if any_oov:
-                xt_hat_oov = self.xt_oov@self.mapping.T
-                xt_hat = np.concatenate([xt_hat_iov, xt_hat_oov])
-            else:
-                xt_hat = xt_hat_iov
-
-        file_src = os.path.join(outf, ('vectors-%s.' + suffix + '.txt') % self.src_lang)
-        file_trg = os.path.join(outf, ('vectors-%s.' + suffix + '.txt') % self.trg_lang)
+        file_src = os.path.join(outf, ('vectors-s.' + suffix + '.txt'))
+        file_trg = os.path.join(outf, ('vectors-t.' + suffix + '.txt'))
 
         try:
             embeddings.write(self.src_words, xs_hat, open(file_src, "w", encoding=encoding, errors='surrogateescape'))
             embeddings.write(self.trg_words, xt_hat, open(file_trg, "w", encoding=encoding, errors='surrogateescape'))
         except:
            print('Problem writing vectors')
-
-    def dump_translations(self, gold_dict, outf, score_type = 'coupling', adjust = None, verbose = 0):
-        """
-            predicted: dict srcw: [sorted candidates]
-            gold:      dict srcw: [translations]
-
-        """
-        with open(outf, 'w') as f:
-            oov = set()
-            n,m = self.coupling.shape # The actual size of mapping computed, might be smaller that total size of dict
-            # 1. Compute scores for desired words
-            seeds = [self.src_words[s] for s,t in gold_dict.items() if s < len(self.src_words)]
-
-            if self.scores is None:
-                self.compute_scores(score_type, adjust, verbose = verbose > 1)  # adjust = 'csls',)
-
-            topk_predictions, oov = self.generate_translations(words = seeds, candidates = 10)
-
-            for src_idx,tgt_idx in gold_dict.items():
-                if src_idx > n or np.all([e>m for e in tgt_idx]):
-                    continue
-                else:
-                    src_word = self.src_words[src_idx]
-                    predicted = topk_predictions[src_word]
-                    targets   = [self.trg_words[j] for j in tgt_idx]
-                    row = '\t'.join([src_word,'||'] + predicted)
-                    f.write(row + '\n')
-
-    def score_translations(self, gold_dict, verbose = False):
-        """
-            predicted: dict srcw: [sorted candidates]
-            gold:      dict srcw: [translations]
-
-        """
-        oov = set()
-        n,m = self.scores.shape # The actual size of mapping computed, might be smaller that total size of dict
-        assert n == self.xs.shape[0], "Score matrix size does not match number of src vecs"
-        assert m == self.xs.shape[0], "Score matrix size does not match number of trg vecs"
-
-        correct = {1:0, 5:0, 10:0}
-
-        # 1. Retrieve scores for desired words
-        seeds = [self.src_words[s] for s,t in gold_dict.items() if s < len(self.src_words)]
-
-        topk_predictions, oov = self.generate_translations(words = seeds, candidates = 10)
-
-
-        if verbose:
-            print('@1 @5 @10 {:10} {:30} {:80}'.format('Src','Gold','Top K Predicted'))
-            print('-'*80)
-            print_row = '{:2} {:2} {:2} {:10} {:30} {:80}'
-
-
-        for src_idx,tgt_idx in gold_dict.items():
-            if src_idx > n or np.all([e>m for e in tgt_idx]):
-                oov.add(src_idx)
-                continue
-            else:
-                src_word = self.src_words[src_idx]
-                predicted = topk_predictions[src_word]
-                targets   = [self.trg_words[j] for j in tgt_idx]
-                correct_strings = []
-                for k in [1,5,10]:
-                    if set(predicted[:k]).intersection(targets):
-                        correct[k] +=1
-                        correct_strings.append('\u2713')
-                    else:
-                        correct_strings.append('X')
-
-                if verbose:
-                    pred_str =  ','.join(predicted)
-                    gold_str = ','.join(targets)
-                    print(print_row.format(*correct_strings,src_word,gold_str,pred_str))
-
-
-        precisions = {k: v / len(gold_dict) for k,v in correct.items()}
-        coverage = len(gold_dict.keys()) / (len(gold_dict.keys()) + len(oov))
-        if verbose:
-            print('-'*80)
-            print('Coverage: {:7.2%}  Precisions: @1:{:7.2%} @5:{:7.2%} @10:{:7.2%}'.format(coverage, precisions[1], precisions[5], precisions[10]))
-        return  precisions
-
-    def generate_translations(self, words = None, candidates = 1, nn_method = 'naive', return_scores = False):
-        """ ~ predict method in scikit classes. For now, it's transductive,
-            computes translations for words specified from the beginning.
-            TODO: Generalize to predict for new ones too whenever possible,
-            analogous to .predict() being used with train or test (new) data
-
-            FIXME: Maybe we shouldn't compute translations for all source words, if
-            we expect eval set to have far less. But seems that at least scoring methods should
-            incorporate info from all, to normalize properly. -> Another arument in favor
-            of separate compute_scores and generate_translations methods.
-
-            If words provided, only compute translation for those.
-
-                - candidates (int): number of translation candidates to return. If >1
-                                    returns them in decreasing order of relevance (score)
-
-
-        """
-        oov = set()
-        k = candidates
-        predicted = {}
-
-        if words is None:
-            words = self.src_words
-
-        for ws in words:
-            if not ws in self.src_word2ind:
-                oov.add(ws)
-                continue
-            src_idx = self.src_word2ind[ws]
-
-            if nn_method == 'naive':
-                # For each word (row), select target words (columns) with largest score - no intra-row agreement
-                knn = np.argpartition(self.scores[src_idx,:], -k)[-k:] # argpartition returns top k not in order but it's efficient (doesnt sort all rows)
-                knn_sort = knn[np.argsort(-self.scores[src_idx,knn])] # With - to get descending order
-
-            translations = [self.trg_words[k] for k in knn_sort]
-
-            if return_scores:
-                translation_scores = self.scores[src_idx,knn_sort]
-            predicted[ws] = translations
-
-        return predicted, oov
 
     def find_mutual_nn(self):
         """ Finds mutual nereast neighbors among the whole source and target words """
@@ -1076,7 +915,11 @@ class gromov_bilind(bilingual_mapping):
             pseudo = [(k,v[0]) for k,v in translations.items()]
         if max_anchors:
             pseudo = pseudo[:max_anchors]
-        print('Finding orthogonal mapping with {} anchor points via {}'.format(len(pseudo), anchor_method))
+        if anchor_method == 'mutual_nn' or anchor_method == 'all':
+            print('Finding orthogonal mapping with {} anchor points via {}'.format(len(pseudo), anchor_method))
+        else:
+            print('Finding orthogonal mapping with {} anchor points via {}'.format(max_anchors, anchor_method))
+
         if anchor_method in ['mutual_nn', 'all']:
             idx_src = [self.src_word2ind[ws] for ws,_ in pseudo]
             idx_trg = [self.trg_word2ind[wt] for _,wt in pseudo]
@@ -1088,6 +931,8 @@ class gromov_bilind(bilingual_mapping):
             ot_emd.xs_ = self.xs
             ot_emd.xt_ = self.xt
             ot_emd.coupling_= self.coupling
+            print(anchor_method,  self.coupling)
+            sys.exit()
             xt_hat = ot_emd.inverse_transform(Xt=self.xt) # Maps target to source space
             P = orth_procrustes(xt_hat, self.xt)
         
@@ -1271,18 +1116,19 @@ class custom_gromov_bilind(custom_bilingual_mapping):
         else:
             self.solver.compute_accuracy = False
 
-    def get_mapping(self, type = 'orthogonal', anchor_method = 'barycenter', max_anchors = None):
+    def get_mapping(self, type = 'orthogonal', anchor_method = 'barycenter', max_anchors = 5000):
         """
             Infer mapping given optimal coupling
         """
         # Method 1: Orthogonal projection that best macthes NN
         self.compute_scores(score_type='coupling') # TO refresh
+        # print("anchor_method: ", anchor_method)
         if anchor_method == 'mutual_nn':
             pseudo = self.find_mutual_nn()#[:100]
         elif anchor_method == 'all':
             translations, oov = self.generate_translations()
             pseudo = [(k,v[0]) for k,v in translations.items()]
-        if max_anchors:
+        if max_anchors and anchor_method != 'barycenter':
             pseudo = pseudo[:max_anchors]
         print('Finding orthogonal mapping with {} anchor points via {}'.format(max_anchors, anchor_method))
         if anchor_method == 'barycenter':
@@ -1290,7 +1136,7 @@ class custom_gromov_bilind(custom_bilingual_mapping):
             ot_emd.xs_ = self.xs
             ot_emd.xt_ = self.xt
             ot_emd.coupling_= self.coupling
-            xt_hat = ot_emd.inverse_transform(Xt=self.xt) # Maps target to source space
+            xt_hat = ot_emd.inverse_transform(Xs=self.xs, Xt=self.xt) # Maps target to source space
             P = orth_procrustes(xt_hat, self.xt)
         return P
 
