@@ -26,7 +26,7 @@ import ot
 
 from src.bilind import custom_gromov_bilind
 import src.embeddings as embeddings
-
+import numpy.linalg.norm as norm
 
 def dump_results(outdir, args, optim_args, acc, BLI):
     results = {'acc': acc, 'args': vars(args), 'optim_args':  vars(optim_args), 'G': BLI.coupling}
@@ -74,6 +74,8 @@ def parse_args():
 
 
     #### PATHS
+    general.add_argument('--det_res', type=str, 
+                    help='detection result pkl file')
     general.add_argument('--chkpt_path', type=str,
                          default='checkpoints', help='where to save the snapshot')
     general.add_argument('--results_path', type=str, default='out',
@@ -189,9 +191,51 @@ def main():
             - model? Popt Gopt
     """
     args, optim_args = parse_args()
+    if args.det_res:
+        xs, xt = [], []
+        s_label, t_label = [], []
+        detect_result = pickle.load(open(args.det_res, "rb" ))
+        for idx, image_id in enumerate(detect_result.keys()):
+            current_xs, current_xt = [], []
+            current_s_label, current_t_label = [], []
+            results = detect_result[image_id]
+            for result in results:
+                if result["cls"] = "body":
+                    current_xs.append(result["feature"])
+                    current_s_label.append(result["body_id"])
+                else:
+                    current_xt.append(result["feature"])
+                    current_t_label.append(result["body_id"])
+            
+            # sort accord to label
+            current_t_label = np.array(current_t_label)
+            current_xt = np.array(current_xt)
+            inds = current_t_label.argsort()
+            sorted_cur_xt = current_xt[inds]
+            sorted_t_label = inds
 
-    # Read Word Embeddings
-    xs, xt, s_label, t_label = init_data()
+            sorted_cur_xs = []
+            sorted_s_label = []
+            used_index = np.zeros(shape=len(current_xs), )
+            for each_index in inds:
+                tmp_idx = current_xs.index(each_index)
+                sorted_cur_xs.append(current_xs[tmp_idx])
+                sorted_s_label.append(each_index)
+                used_index[each_index] = 1.0
+
+            unused_feature = []
+            for tmp_idx, each_index in enumerate(used_index):
+                if each_index == 1.0:
+                    continue
+                unused_feature.append(current_s_label[tmp_idx])
+                sorted_cur_xs.append(current_s_label[tmp_idx])
+
+            for each_unused_feature in unused_feature:
+                dists = [norm(each_unused_feature-x) for x in sorted_cur_xs]
+
+    else:
+        # Read Word Embeddings
+        xs, xt, s_label, t_label = init_data()
 
     outdir   = make_path(args.results_path, args)
     chkptdir = make_path(args.chkpt_path, args)
@@ -266,5 +310,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # old_main()
     main()
