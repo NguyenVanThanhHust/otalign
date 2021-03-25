@@ -26,7 +26,8 @@ import ot
 
 from src.bilind import custom_gromov_bilind
 import src.embeddings as embeddings
-import numpy.linalg.norm as norm
+# import numpy.linalg.norm as norm
+from numpy.linalg import norm as norm
 
 def dump_results(outdir, args, optim_args, acc, BLI):
     results = {'acc': acc, 'args': vars(args), 'optim_args':  vars(optim_args), 'G': BLI.coupling}
@@ -74,7 +75,7 @@ def parse_args():
 
 
     #### PATHS
-    general.add_argument('--det_res', type=str, 
+    general.add_argument('--det_gts', type=str, required=True,
                     help='detection result pkl file')
     general.add_argument('--chkpt_path', type=str,
                          default='checkpoints', help='where to save the snapshot')
@@ -191,50 +192,91 @@ def main():
             - model? Popt Gopt
     """
     args, optim_args = parse_args()
-    if args.det_res:
+    if args.det_gts:
         xs, xt = [], []
         s_label, t_label = [], []
-        detect_result = pickle.load(open(args.det_res, "rb" ))
+        detect_result = pickle.load(open(args.det_gts, "rb" ))
         for idx, image_id in enumerate(detect_result.keys()):
             current_xs, current_xt = [], []
             current_s_label, current_t_label = [], []
             results = detect_result[image_id]
+            if image_id == "train_0027_004035_004":
+                continue
+            # print(image_id)
+            # print(results)
             for result in results:
-                if result["cls"] = "body":
+                if result["cls"] == "body":
                     current_xs.append(result["feature"])
                     current_s_label.append(result["body_id"])
                 else:
                     current_xt.append(result["feature"])
                     current_t_label.append(result["body_id"])
+
+            if len(current_t_label) == 0:
+                continue
             
             # sort accord to label
             current_t_label = np.array(current_t_label)
             current_xt = np.array(current_xt)
             inds = current_t_label.argsort()
             sorted_cur_xt = current_xt[inds]
-            sorted_t_label = inds
+            sorted_t_label = current_t_label[inds]
 
             sorted_cur_xs = []
             sorted_s_label = []
             used_index = np.zeros(shape=len(current_xs), )
-            for each_index in inds:
-                tmp_idx = current_xs.index(each_index)
+            for each_index in sorted_t_label:
+                _tmp_idx = np.where(current_s_label == each_index)
+                tmp_idx = _tmp_idx[0][0]
                 sorted_cur_xs.append(current_xs[tmp_idx])
                 sorted_s_label.append(each_index)
-                used_index[each_index] = 1.0
+                used_index[tmp_idx] = 1.0
 
             unused_feature = []
             for tmp_idx, each_index in enumerate(used_index):
                 if each_index == 1.0:
                     continue
-                unused_feature.append(current_s_label[tmp_idx])
-                sorted_cur_xs.append(current_s_label[tmp_idx])
+                unused_feature.append(current_xs[tmp_idx])
 
             for each_unused_feature in unused_feature:
-                dists = [norm(each_unused_feature-x) for x in sorted_cur_xs]
+                min_distance = 1000.0
+                this_index = -5.0
+                for u_idx, (label, each_used_feature) in enumerate(zip(sorted_s_label, sorted_cur_xs)):
+                    distance = norm(each_unused_feature-each_used_feature)
+                    if distance < min_distance:
+                        min_distance = distance
+                        this_index = label
+                tmp_idx = np.where(sorted_t_label==this_index)[0][0]
+                closest_target_feature = sorted_cur_xt[tmp_idx]
+                fake_closest_target_feature = np.random.normal(0.0, 0.01, 1024) + closest_target_feature
+                fake_closest_target_feature = np.expand_dims(fake_closest_target_feature, axis=0)
+                sorted_cur_xs.append(each_used_feature)
+                sorted_cur_xt = np.concatenate((sorted_cur_xt, fake_closest_target_feature), axis=0)
+                sorted_s_label.append(-1.0)
+                sorted_t_label = np.append(sorted_t_label, -1.0)
+            
+            sorted_cur_xs = np.array(sorted_cur_xs)
+            # offset label
+            current_offset = len(xs)
+
+            sorted_s_label = [x+current_offset+1 for x in sorted_s_label]
+            sorted_t_label = [x+current_offset+1 for x in sorted_t_label]
+            sorted_s_label = np.array(sorted_s_label)
+            sorted_t_label = np.array(sorted_t_label)
+
+            if isinstance(xs, list) or isinstance(xt, list):
+                xs, xt = sorted_cur_xs, sorted_cur_xt
+            else:
+                xs = np.concatenate((xs, sorted_cur_xs), axis=0)
+                xt = np.concatenate((xt, sorted_cur_xt), axis=0)
+
+            print("xs.shape, xt.shape: ", xs.shape, xt.shape)
+            s_label = np.concatenate((s_label, sorted_s_label), axis=0)
+            t_label = np.concatenate((t_label, sorted_t_label), axis=0)
 
     else:
         # Read Word Embeddings
+
         xs, xt, s_label, t_label = init_data()
 
     outdir   = make_path(args.results_path, args)
